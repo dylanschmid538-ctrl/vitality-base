@@ -19,12 +19,24 @@ Absichtlich ohne Abhaengigkeiten: xlsx ist ein ZIP voller XML, das kann die
 Standardbibliothek. Kein openpyxl, kein pandas.
 
     python3 scripts/import-spending.py ~/Downloads/Finanzassistent-*.xlsx
+    python3 scripts/import-spending.py ~/Downloads/Finanzassistent-*.xlsx --write
     python3 scripts/import-spending.py --selftest
+
+Ohne --write landet das JSON auf stdout, damit man erst schauen kann. Mit
+--write geht es direkt in den finance-Slot (gemergt, nichts wird ueberschrieben).
 """
 
+# Python 3.9 auf diesem Mac: `str | None` gibt es dort zur Laufzeit noch nicht.
+# Diese Zeile schiebt die Auswertung aller Annotationen auf und macht die
+# moderne Schreibweise auch dort lesbar.
+from __future__ import annotations
+
 import json
+import os
 import re
 import sys
+import urllib.parse
+import urllib.request
 import zipfile
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -202,18 +214,71 @@ def selftest() -> None:
     print("Selbsttest ok")
 
 
+# ── Schreiben ────────────────────────────────────────────────────────────────
+def env(name: str) -> str | None:
+    """Wert aus .env.local im Repo-Wurzelverzeichnis. Kein dotenv-Paket noetig."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env.local")
+    try:
+        with open(path) as f:
+            for line in f:
+                if line.startswith(name + "="):
+                    return line.split("=", 1)[1].strip() or None
+    except OSError:
+        pass
+    return os.environ.get(name)
+
+
+def write(payload: dict) -> None:
+    """Die Summen in den finance-Slot mergen — beide Schluessel, alles andere bleibt.
+
+    MERGE, nicht ersetzen: im selben Datensatz haengen Konten, Positionen, Abos
+    und die Vermoegenshistorie. Ein Ueberschreiben waere Datenverlust.
+
+    Zwei Zeilen, weil lib/sync.ts unter `finance` schreibt und tileStore unter
+    `me:finance` — beim Laden gewinnt eine davon. Wer nur eine aktualisiert,
+    sieht je nach Codepfad alte Zahlen.
+    """
+    url, key = env("NEXT_PUBLIC_SUPABASE_URL"), env("SUPABASE_SECRET_KEY")
+    if not url or not key:
+        raise SystemExit("NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SECRET_KEY fehlen in .env.local")
+    head = {"apikey": key, "Authorization": "Bearer " + key,
+            "Content-Type": "application/json", "Prefer": "return=representation"}
+
+    def call(method: str, path: str, body=None):
+        req = urllib.request.Request(url + path, method=method, headers=head,
+                                     data=json.dumps(body).encode() if body else None)
+        return json.loads(urllib.request.urlopen(req).read() or "null")
+
+    rows = call("GET", "/rest/v1/tile_data?select=tile_id,data&or=(tile_id.eq.finance,tile_id.eq.me:finance)")
+    if not rows:
+        raise SystemExit("Keine finance-Zeile in Supabase — im Dashboard einmal etwas speichern, dann erneut.")
+    for row in rows:
+        data = row["data"] if isinstance(row.get("data"), dict) else {}
+        data.update(payload)
+        call("PATCH", "/rest/v1/tile_data?tile_id=eq." + urllib.parse.quote(row["tile_id"]), {"data": data})
+        print(f"  {row['tile_id']:<12} aktualisiert", file=sys.stderr)
+
+
 def main() -> None:
-    args = sys.argv[1:]
+    args = [a for a in sys.argv[1:]]
     if not args or args[0] in ("-h", "--help"):
         raise SystemExit(__doc__)
     if args[0] == "--selftest":
         return selftest()
 
-    spending, diag = parse(read_rows(args[0]))
-    print(json.dumps({
-        "spending": spending,
-        "spendingUpdated": date.today().isoformat(),
-    }, ensure_ascii=False, indent=2))
+    do_write = "--write" in args
+    files = [a for a in args if not a.startswith("-")]
+    if not files:
+        raise SystemExit("Keine Datei angegeben.")
+
+    spending, diag = parse(read_rows(files[0]))
+    payload = {"spending": spending, "spendingUpdated": date.today().isoformat()}
+
+    if do_write:
+        write(payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+
     print(f"\n{diag['buchungen']} Ausgabenbuchungen, {len(spending)} Monate", file=sys.stderr)
     if diag["unbekannt"]:
         total = sum(diag["unbekannt"].values())

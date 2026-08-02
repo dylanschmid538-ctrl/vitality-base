@@ -4,8 +4,7 @@
  *   y = the Mentor (the overseer, where the math lives)
  *   x = each input tile · w = that tile's share of the ACTIVE goal
  *
- * Each goal carries its own weights (sum ≈ 100): "famous YouTuber" leans on
- * Brand; "185 lb lean" leans on Train/Fuel. The row badges show the active
+ * Each goal carries its own weights (sum = 100). The row badges show the active
  * goal's weights; the Mentor lists every goal with its full breakdown.
  *
  * WHO DOES THE MATH: Claude Code, at build time — not an Anthropic key, not
@@ -16,10 +15,14 @@
  *    (ask me questions if you need to). Each goal's weights sum to 100."
  *
  * Claude reasons, edits DEFAULT_GOALS, you reload. Later it can also
- * cross-reference your real tile data (video published vs workouts, water,
- * caffeine) and retune from evidence. A localStorage override
- * ('vitality:goals') wins over these defaults, so the connector or a goals
- * UI can retune without a code change.
+ * cross-reference your real tile data and retune from evidence. A localStorage
+ * override ('vitality:goals') wins over these defaults.
+ *
+ * ── State 02.08.2026 ──────────────────────────────────────────────────────
+ * Filled from the owner's own answers (see the vault note "04 - Datenerfassung").
+ * Nothing here is invented: `progress` stays 0 on both goals because no data
+ * has been swept yet, and `brand` sits at 0 because TikTok/YouTube were
+ * deliberately skipped — the tile stays on the board, empty, not deleted.
  */
 
 export interface Goal {
@@ -49,31 +52,33 @@ export interface Notice {
 
 export const DEFAULT_GOALS: Goal[] = [
   {
-    id: 'youtube',
-    title: 'Become a famous YouTuber',
+    id: 'users10k',
+    title: '10 000 App-Nutzer',
     accent: '#6EE7B7',
-    // Train entered this goal when the mentor noticed workouts drive output —
-    // see DEFAULT_NOTICED. Before: brand 70 / vitals 20 / finance 10.
-    weights: { brand: 62, train: 8, vitals: 20, finance: 10 },
-    progress: 28,
+    // Measured across all apps combined. Brand sits at 0: the socials were
+    // skipped on purpose, so nothing on the board tracks reach yet. The lever
+    // that is left is shipping time — hence Peak carries this goal.
+    weights: { peak: 45, vitals: 20, finance: 15, train: 10, fuel: 10, brand: 0 },
+    progress: 0,
   },
   {
-    id: 'lean185',
-    title: 'Be 185 lb lean',
+    id: 'bf10',
+    title: '10 % Körperfett',
     accent: '#8AB4FF',
-    weights: { train: 40, fuel: 30, vitals: 20, peak: 10 },
-    progress: 61,
+    // From ~25 % at 93 kg: roughly 15 kg of fat, landing near 77–78 kg if
+    // lean mass holds. Target date 31.01.2027 ≈ 0,6 kg/week.
+    weights: { fuel: 45, train: 30, vitals: 20, peak: 5, brand: 0 },
+    progress: 0,
   },
 ]
 
-/** The overseer's synthesis of EVERY goal, polished into one sentence by the
- *  mentor (Claude Code). Switching it on = top priority — the board goes gold. */
+/** The overseer's synthesis of EVERY goal. Switching it on = top priority. */
 export const OVERALL_GOAL: Goal = {
   id: 'overall',
-  title: 'A jacked, famous YouTuber',
+  title: 'Profitable Apps',
   accent: '#E8C878',
-  weights: { brand: 30, train: 25, vitals: 20, fuel: 13, finance: 7, peak: 5 },
-  progress: 34,
+  weights: { peak: 40, finance: 25, vitals: 15, train: 10, fuel: 10, brand: 0 },
+  progress: 0,
 }
 
 /** Overall first, then the individual goals. */
@@ -87,27 +92,12 @@ export function activeGoal(): Goal | undefined {
   return allGoals().find((g) => g.id === id) ?? goals()[0]
 }
 
-export const DEFAULT_NOTICED: Notice[] = [
-  {
-    id: 'n-workouts-drive',
-    when: 'this morning',
-    text: 'When you skip the gym, you drink less water — and your analytics take a deep dive the same day. Workouts might be the key to your drive, not just your body. I moved Train into the YouTuber goal.',
-    points: [
-      'When you skip the gym, you drink **less water** the same day',
-      'No-workout days: your **analytics take a deep dive**',
-      '**Workouts might be the key to your drive** — not just your body',
-      'So I moved **Train into the YouTuber goal**',
-    ],
-    deltas: [
-      { tile: 'train', from: 0, to: 8 },
-      { tile: 'brand', from: 70, to: 62 },
-    ],
-  },
-]
+/** The mentor's noticed feed. EMPTY until a real sweep has run — an observation
+ *  here reads as "I saw this in your data", so a seeded example would be a lie. */
+export const DEFAULT_NOTICED: Notice[] = []
 
 /** A blueprint for a tile they SHOULD have — a gap the mentor found between
- *  their goal and what their tiles actually track. Pre-written by the mentor
- *  (Claude Code) from their data; localStorage 'vitality:ideas' overrides. */
+ *  their goal and what their tiles actually track. */
 export interface TileIdea {
   /** ONE word — how the idea shows up in the popup (the mentor picks it) */
   word?: string
@@ -120,53 +110,47 @@ export interface TileIdea {
   estWeight: number
 }
 
+/** These are the owner's OWN phase-2 wishes, not guesses from data. */
 export const DEFAULT_IDEAS: Record<string, TileIdea[]> = {
   overall: [
     {
-      word: 'Pipeline',
-      title: 'Content pipeline',
-      tracks: 'videos in flight → published, per week',
-      why: 'Your output IS the goal — but nothing tracks the machine that makes it. Brand tracks the channel; this tracks the work.',
-      estWeight: 10,
+      word: 'Analytics',
+      title: 'App-Statistiken',
+      tracks: 'Nutzerzahlen und Umsatz je App, an einem Ort',
+      why: 'Beide Hauptziele hängen an dieser Zahl — und aktuell trackt sie kein einziges Tile.',
+      estWeight: 20,
     },
     {
-      word: 'Sleep',
-      title: 'Sleep consistency',
-      tracks: 'bedtime variance, night by night',
-      why: 'Your recovery swings track your analytics dips. Vitals sees the score — this would see the habit behind it.',
-      estWeight: 6,
-    },
-  ],
-  youtube: [
-    {
-      word: 'Pipeline',
-      title: 'Content pipeline',
-      tracks: 'ideas → filmed → edited → published',
-      why: 'You track the channel (Brand) but not the machine that feeds it. Publishing cadence is the single biggest lever here.',
-      estWeight: 12,
-    },
-    {
-      word: 'Caffeine',
-      title: 'Caffeine timing',
-      tracks: 'when + how much, against publish days',
-      why: 'The data hints more caffeine on publish days — fuel or crutch? One small tile answers it.',
-      estWeight: 5,
-    },
-  ],
-  lean185: [
-    {
-      word: 'Water',
-      title: 'Water',
-      tracks: 'daily intake vs target',
-      why: 'The noticed pattern: skip the gym → drink less. No tile tracks water yet — it is the cheapest input you are missing.',
+      word: 'Obsidian',
+      title: 'Obsidian-Anbindung',
+      tracks: 'Notizen und Projektstände aus dem Vault',
+      why: 'Die Planung liegt bereits im Vault. Das Board sieht sie nur, wenn sie angebunden ist.',
       estWeight: 8,
     },
     {
-      word: 'Steps',
-      title: 'Steps / NEAT',
-      tracks: 'daily movement outside the gym',
-      why: 'At 185-lean, the deficit is won between workouts. Train sees sessions; nothing sees the other 23 hours.',
-      estWeight: 7,
+      word: 'ToDos',
+      title: 'To-Dos je App',
+      tracks: 'offene Aufgaben pro Projekt',
+      why: 'Peak misst die Zeit, aber nicht, woran sie gegangen ist.',
+      estWeight: 10,
+    },
+  ],
+  users10k: [
+    {
+      word: 'Analytics',
+      title: 'App-Statistiken',
+      tracks: 'tägliche Installs und aktive Nutzer je App',
+      why: 'Das Ziel ist eine Zahl, die derzeit nirgends steht. Ohne sie bleibt der Fortschritt bei 0.',
+      estWeight: 25,
+    },
+  ],
+  bf10: [
+    {
+      word: 'Health',
+      title: 'Apple Health',
+      tracks: 'Gewicht, Schlaf, Kalorien — aus MyStrengthBook, Yazio und der Watch',
+      why: 'Alle drei Quellen schreiben nach Apple Health. Eine Anbindung füllt Fuel, Train und Vitals auf einmal.',
+      estWeight: 15,
     },
   ],
 }
@@ -229,17 +213,21 @@ export function goals(): Goal[] {
   return DEFAULT_GOALS
 }
 
-/** The active goal id (persisted). Defaults to the first goal. */
+/** The active goal id (persisted). Defaults to the first goal.
+ *  A stored id is only honoured if that goal still EXISTS — otherwise a goal
+ *  that was renamed or removed would leave a dangling id behind, and the
+ *  header would keep showing a title nothing else on the board agrees with. */
 export function activeGoalId(): string {
+  const fallback = goals()[0]?.id ?? ''
   if (typeof window !== 'undefined') {
     try {
       const v = window.localStorage.getItem('vitality:goal:active')
-      if (v) return v
+      if (v && allGoals().some((g) => g.id === v)) return v
     } catch {
       /* fall through */
     }
   }
-  return goals()[0]?.id ?? ''
+  return fallback
 }
 
 export function setActiveGoalId(id: string): void {

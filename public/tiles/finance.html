@@ -12,8 +12,13 @@
 
   Sealed: no network. Saves through window.Vitality. Stock prices via the host
   bridge: window.Vitality.stock(symbol) (server-routed Finnhub key; manual works
-  keyless). Store: { accounts:[{id,name,balance}], holdings:[{id,symbol,shares,price}],
-  subs:[{id,name,amount}], history:[{t,value}] }
+  keyless). Store: { accounts:[{id,name,balance}], holdings:[{id,symbol,shares,price,cost,since}],
+  subs:[{id,name,amount,period,next}], history:[{t,value}] }
+
+  period is 'monthly' | 'yearly' | 'weekly'; missing counts as monthly, so rows
+  written before this field keep working. The burn always normalises to a month,
+  so a yearly bill is stored at its REAL amount instead of being smuggled in as
+  a monthly one. cost = total invested, since = purchase date (both optional).
 -->
 <style>
   :root{
@@ -101,7 +106,23 @@ function subs(){if(!Array.isArray(store.subs))store.subs=[];return store.subs}
 function hist(){if(!Array.isArray(store.history))store.history=[];return store.history}
 function holdValue(h){return (typeof h.shares==='number'?h.shares:0)*(typeof h.price==='number'?h.price:0)}
 function stockTotal(){return holds().reduce((s,h)=>s+holdValue(h),0)}
-function monthlyBurn(){return subs().reduce((s,x)=>s+(typeof x.amount==='number'?x.amount:0),0)}
+/* a yearly bill is not a monthly one: normalise before summing, never before storing */
+const PERIODS={monthly:{label:'monthly',per:'/mo',toMonthly:v=>v},yearly:{label:'yearly',per:'/yr',toMonthly:v=>v/12},weekly:{label:'weekly',per:'/wk',toMonthly:v=>v*52/12}};
+function periodOf(x){return PERIODS[x&&x.period]||PERIODS.monthly}
+function subMonthly(x){return periodOf(x).toMonthly(typeof x.amount==='number'?x.amount:0)}
+function monthlyBurn(){return subs().reduce((s,x)=>s+subMonthly(x),0)}
+/* days until the next charge; null when no date is stored */
+function daysToNext(x){
+  if(!x||!x.next)return null;
+  const p=String(x.next).split('-').map(Number);if(p.length!==3||!p[0])return null;
+  const d=new Date(p[0],p[1]-1,p[2]);const t=new Date();t.setHours(0,0,0,0);
+  return Math.round((d-t)/86400000);
+}
+function nextLabel(x){
+  const n=daysToNext(x);if(n==null)return '';
+  if(n<0)return ' · overdue';
+  return ' · '+(n===0?'today':n===1?'tomorrow':'in '+n+'d');
+}
 function netWorth(){let s=0;for(const a of accts())s+=(typeof a.balance==='number'?a.balance:0);for(const h of holds())s+=holdValue(h);return s;}
 function fmtMoney(n){if(n==null)return '—';const sign=n<0?'−':'';const a=Math.abs(n);
   return sign+'$'+(a>=1e6?(a/1e6).toFixed(2)+'M':a>=1e4?Math.round(a).toLocaleString():a.toLocaleString(undefined,{maximumFractionDigits:0}));}
@@ -164,12 +185,18 @@ function listStocks(){
   let h='';
   for(const hd of holds()){
     const px=typeof hd.price==='number'?hd.price:null;
-    const sub=(typeof hd.shares==='number'?hd.shares:0)+' sh'+(px!=null?' @ '+fmtMoney(px):' · '+(fetchingS.has(hd.id)?'pricing…':'add a key to price'));
+    /* the gain only shows once BOTH sides are real: a live price and a cost
+       basis. One without the other would be a number pretending to be a result */
+    const cost=typeof hd.cost==='number'?hd.cost:null;
+    let gain='';
+    if(cost!=null&&px!=null){const g=holdValue(hd)-cost;gain=' · '+(g>=0?'+':'')+fmtMoney(g);}
+    else if(cost!=null){gain=' · cost '+fmtMoney(cost);}
+    const sub=(typeof hd.shares==='number'?hd.shares:0)+' sh'+(px!=null?' @ '+fmtMoney(px):' · '+(fetchingS.has(hd.id)?'pricing…':'add a key to price'))+gain;
     h+='<div class="row"><div class="nmwrap"><span class="nm">'+esc(hd.symbol)+'</span><div class="hsub">'+sub+'</div></div>'
       +valCell(hd.id,'sh',(typeof hd.shares==='number'?hd.shares:''),false)+(editingId===hd.id?'':(fetchingS.has(hd.id)?'…':fmtMoney(holdValue(hd)))+'</span>')
       +'<button class="del" data-del="'+hd.id+'" title="Remove">&times;</button></div>';
   }
-  if(addingStock)h+='<div class="addRow stock"><input id="symIn" placeholder="ticker — e.g. AAPL" autocomplete="off"/><input id="shIn" type="text" inputmode="decimal" placeholder="shares" autocomplete="off"/><button data-addstockgo>Add</button></div>';
+  if(addingStock)h+='<div class="addRow stock"><input id="symIn" placeholder="ticker — e.g. AAPL" autocomplete="off"/><input id="shIn" type="text" inputmode="decimal" placeholder="shares" autocomplete="off"/><input id="costIn" type="text" inputmode="decimal" placeholder="invested (optional)" autocomplete="off"/><input id="sinceIn" type="date" title="bought on"/><button data-addstockgo>Add</button></div>';
   else h+='<button class="addBtn" data-addstock>+ Add stock</button>';
   if(finNote)h+='<div class="keyNote">stocks need a free <b>Finnhub key</b> in .env.local — your mentor sets it up. Until then they hold at $0.</div>';
   return h;
@@ -177,11 +204,15 @@ function listStocks(){
 function listSubs(){
   let h='';
   for(const sb of subs()){
-    h+='<div class="row"><div class="nmwrap"><span class="nm">'+esc(sb.name)+'</span><div class="hsub">subscription</div></div>'
-      +valCell(sb.id,'sub',(typeof sb.amount==='number'?sb.amount:''),false)+(editingId===sb.id?'':fmtMoney(typeof sb.amount==='number'?sb.amount:0)+'/mo</span>')
+    const P=periodOf(sb);
+    /* show the real amount at its real period; the monthly equivalent only
+       tags along when the two differ, so nothing reads as a monthly bill */
+    const mo=P===PERIODS.monthly?'':' · '+fmtMoney(subMonthly(sb))+'/mo';
+    h+='<div class="row"><div class="nmwrap"><span class="nm">'+esc(sb.name)+'</span><div class="hsub">'+P.label+mo+esc(nextLabel(sb))+'</div></div>'
+      +valCell(sb.id,'sub',(typeof sb.amount==='number'?sb.amount:''),false)+(editingId===sb.id?'':fmtMoney(typeof sb.amount==='number'?sb.amount:0)+P.per+'</span>')
       +'<button class="del" data-del="'+sb.id+'" title="Remove">&times;</button></div>';
   }
-  if(addingSub)h+='<div class="addRow"><input id="subNmIn" placeholder="subscription — e.g. Netflix" autocomplete="off"/><input id="subAmtIn" type="text" inputmode="decimal" placeholder="$ / month" autocomplete="off"/><button data-addsubgo>Add</button></div>';
+  if(addingSub)h+='<div class="addRow"><input id="subNmIn" placeholder="subscription — e.g. Netflix" autocomplete="off"/><input id="subAmtIn" type="text" inputmode="decimal" placeholder="amount" autocomplete="off"/><select id="subPerIn"><option value="monthly">monthly</option><option value="yearly">yearly</option><option value="weekly">weekly</option></select><input id="subNextIn" type="date" title="next charge"/><button data-addsubgo>Add</button></div>';
   else h+='<button class="addBtn" data-addsub>+ Add subscription</button>';
   return h;
 }
@@ -205,7 +236,7 @@ function render(){
       +'<div class="list" style="margin-top:24px">'+listStocks()+'</div>';
   }else{
     html='<div class="kick">✦ monthly burn</div><div class="worth">'+(subs().length?fmtMoney(monthlyBurn())+'<span class="u">/mo</span>':'—')+'</div>'
-      +(subs().length?'<div class="delta">'+subs().length+' renewal'+(subs().length===1?'':'s')+' a month</div>':'')
+      +(subs().length?'<div class="delta">'+subs().length+' subscription'+(subs().length===1?'':'s')+' · normalised to a month</div>':'')
       +'<div class="list" style="margin-top:24px">'+listSubs()+'</div>';
   }
   html+=tabBar();
@@ -242,14 +273,20 @@ function addStock(){
   const s=document.getElementById('symIn'),sh=document.getElementById('shIn');
   const symbol=(s?s.value:'').trim().toUpperCase();if(!symbol){if(s)s.focus();return;}
   const raw=String(sh?sh.value:'').replace(/[,\s]/g,'');const shares=Number(raw);
-  const hd={id:'h'+Math.random().toString(36).slice(2,8),symbol,shares:(raw!==''&&isFinite(shares))?shares:0,price:null};
+  const c=document.getElementById('costIn'),si=document.getElementById('sinceIn');
+  const craw=String(c?c.value:'').replace(/[$,\s]/g,'');const cost=Number(craw);
+  const hd={id:'h'+Math.random().toString(36).slice(2,8),symbol,shares:(raw!==''&&isFinite(shares))?shares:0,price:null,
+    cost:(craw!==''&&isFinite(cost))?cost:null,since:(si&&si.value)?si.value:null};
   holds().push(hd);addingStock=false;persist();render();refreshStock(hd);
 }
 function addSub(){
   const n=document.getElementById('subNmIn'),amt=document.getElementById('subAmtIn');
   const name=(n?n.value:'').trim();if(!name){if(n)n.focus();return;}
   const raw=String(amt?amt.value:'').replace(/[$,\s]/g,'');const amount=Number(raw);
-  subs().push({id:'s'+Math.random().toString(36).slice(2,8),name,amount:(raw!==''&&isFinite(amount))?amount:0});
+  const per=document.getElementById('subPerIn'),nx=document.getElementById('subNextIn');
+  const period=(per&&PERIODS[per.value])?per.value:'monthly';
+  const next=(nx&&nx.value)?nx.value:null;
+  subs().push({id:'s'+Math.random().toString(36).slice(2,8),name,amount:(raw!==''&&isFinite(amount))?amount:0,period,next});
   addingSub=false;persist();render();
 }
 

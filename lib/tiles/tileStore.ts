@@ -1,6 +1,6 @@
 import type { Tile, TileData, TileEnvelope, ReportKind } from './types'
 import { tileSkin, type Skin } from './tileSkin'
-import { supa } from './tileSupabase'
+import { remoteLoad, remoteSave, remoteClear } from './tileSupabase'
 
 /**
  * tileStore is the ONLY module that touches persistence for user tiles.
@@ -239,17 +239,7 @@ const MAX_TILE_DATA = 512 * 1024 // ~512KB per tile, protects the shared localSt
  *  or quota-blocked). When a Supabase project is configured (env vars present) the
  *  write goes there so it syncs across devices; otherwise it stays in localStorage. */
 async function saveData(userId: string, id: string, data: TileData): Promise<boolean> {
-  const db = supa()
-  if (db) {
-    try {
-      const { error } = await db
-        .from('tile_data')
-        .upsert({ tile_id: `${userId}:${id}`, data, updated_at: new Date().toISOString() })
-      return !error
-    } catch {
-      return false
-    }
-  }
+  if (await remoteSave(`${userId}:${id}`, data)) return true
   if (!hasStorage()) return false
   try {
     const json = JSON.stringify(data)
@@ -263,20 +253,8 @@ async function saveData(userId: string, id: string, data: TileData): Promise<boo
 }
 
 async function loadData(userId: string, id: string): Promise<TileData> {
-  const db = supa()
-  if (db) {
-    try {
-      const { data, error } = await db
-        .from('tile_data')
-        .select('data')
-        .eq('tile_id', `${userId}:${id}`)
-        .maybeSingle()
-      if (error || !data) return []
-      return (data.data as TileData) ?? []
-    } catch {
-      return []
-    }
-  }
+  const remote = await remoteLoad(`${userId}:${id}`)
+  if (remote != null) return remote as TileData
   if (!hasStorage()) return []
   try {
     const raw = window.localStorage.getItem(dataKey(userId, id))
@@ -315,14 +293,7 @@ function listDataIds(userId: string): string[] {
  * tile renders its empty state on next load.
  */
 async function clearData(userId: string, id: string): Promise<void> {
-  const db = supa()
-  if (db) {
-    try {
-      await db.from('tile_data').delete().eq('tile_id', `${userId}:${id}`)
-    } catch {
-      /* network fail — still clear local below */
-    }
-  }
+  await remoteClear(`${userId}:${id}`)
   if (!hasStorage()) return
   try {
     window.localStorage.removeItem(dataKey(userId, id))

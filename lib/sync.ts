@@ -1,123 +1,91 @@
 'use client'
 
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-
 /**
- * Optional cross-device sync for tile data.
+ * Cross-device sync for tile data — now over HTTP, not Supabase.
  *
- * The base is zero-backend by default: a tile's `Vitality.save()` data lives in
- * the browser (localStorage). If the forker adds their OWN Supabase project (two
- * public keys in Vercel), tile data is ALSO written to a single `tile_data` table
- * — so opening the same site on another device (their phone) loads the same data.
+ * This module used to hold a Supabase client and the public anon key, which is
+ * exactly what made every row world-readable once the site was deployed. The
+ * key is gone; these functions call /api/store/*, and only the server knows a
+ * database exists. Every signature here is unchanged, so useTileHost and
+ * DashboardGrid did not have to move.
  *
- * No login: the deployment is personal, so the anon key + an open policy on the
- * owner's own project is the whole model. If the keys are absent, everything here
- * no-ops and the app stays purely local.
+ * "Unconfigured" is a supported state, not an error: without Supabase the base
+ * stays purely local (localStorage) and every function below no-ops.
  */
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+/**
+ * Whether the server has Supabase configured. Answered by the server on first
+ * ask and cached, because the client can no longer read the env vars itself.
+ * Undefined until the first call resolves — callers treat that as "not yet".
+ */
+let configured: boolean | undefined
 
-let client: SupabaseClient | null = null
-
-/** Whether cross-device sync is configured (both public keys present). */
-export const syncEnabled = (): boolean => !!(url && anonKey)
-
-function syncClient(): SupabaseClient | null {
-  if (!url || !anonKey) return null
-  if (!client) client = createClient(url, anonKey)
-  return client
-}
-
-/** Push a tile's data to the owner's Supabase. Best-effort; returns false on any failure. */
-export async function syncSave(tileId: string, data: unknown, isoNow: string): Promise<boolean> {
-  const c = syncClient()
-  if (!c) return false
+/** Best-effort JSON fetch. Any failure (offline, 401, 500) reads as "no sync". */
+async function call<T>(path: string, init?: RequestInit): Promise<T | null> {
   try {
-    const { error } = await c
-      .from('tile_data')
-      .upsert({ tile_id: tileId, data, updated_at: isoNow }, { onConflict: 'tile_id' })
-    return !error
-  } catch {
-    return false
-  }
-}
-
-/** Read a tile's data from Supabase, or null if unconfigured / missing / offline. */
-export async function syncLoad(tileId: string): Promise<unknown | null> {
-  const c = syncClient()
-  if (!c) return null
-  try {
-    const { data, error } = await c.from('tile_data').select('data').eq('tile_id', tileId).maybeSingle()
-    if (error) return null
-    return data?.data ?? null
+    const res = await fetch(path, { cache: 'no-store', ...init })
+    if (!res.ok) return null
+    const json = (await res.json()) as T & { configured?: boolean }
+    if (typeof json.configured === 'boolean') configured = json.configured
+    return json
   } catch {
     return null
   }
 }
 
-/** A tile document stored in the owner's Supabase (built from Claude via the MCP connector). */
+/**
+ * Whether cross-device sync is on. Synchronous because its callers are render
+ * paths, so it answers from the cached flag and defaults to TRUE until the
+ * first response lands — an optimistic default means a slow first request shows
+ * a brief empty state instead of silently skipping the cloud copy entirely.
+ * The flag is set as a side effect of the first real call, so nothing has to
+ * probe up front.
+ */
+export const syncEnabled = (): boolean => configured !== false
+
+/** Push a tile's data. Best-effort; returns false on any failure. */
+export async function syncSave(tileId: string, data: unknown): Promise<boolean> {
+  const r = await call<{ ok: boolean }>(`/api/store/${encodeURIComponent(tileId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data }),
+  })
+  return r?.ok ?? false
+}
+
+/** Read a tile's data, or null if unconfigured / missing / offline. */
+export async function syncLoad(tileId: string): Promise<unknown | null> {
+  const r = await call<{ data: unknown }>(`/api/store/${encodeURIComponent(tileId)}`)
+  return r?.data ?? null
+}
+
+/** A tile document built from Claude (the MCP connector) or the paste box. */
 export interface RemoteTile {
   html: string
   name: string | null
 }
 
-/**
- * Read every MCP-built tile from the owner's Supabase, keyed by slot. Returns an
- * empty object if sync is unconfigured / offline. The dashboard prefers these over
- * the static public/tiles files, so a tile made from Claude — on the laptop or the
- * phone — appears without a redeploy. Requires the `tiles` table (supabase/tiles.sql).
- */
+/** Every built tile, keyed by slot. Empty object when unconfigured or offline. */
 export async function syncLoadTiles(): Promise<Record<string, RemoteTile>> {
-  const c = syncClient()
-  if (!c) return {}
-  try {
-    const { data, error } = await c.from('tiles').select('slot, html, name')
-    if (error || !data) return {}
-    const map: Record<string, RemoteTile> = {}
-    for (const row of data as Array<{ slot: string; html: string; name: string | null }>) {
-      if (row.slot && typeof row.html === 'string' && row.html.trim()) {
-        map[row.slot] = { html: row.html, name: row.name ?? null }
-      }
-    }
-    return map
-  } catch {
-    return {}
-  }
+  const r = await call<{ tiles: Record<string, RemoteTile> }>('/api/store/tiles')
+  return r?.tiles ?? {}
 }
 
-/**
- * Write a tile into the owner's Supabase `tiles` table (the "+ New tile" button /
- * paste box). Same store the MCP connector writes to, so a tile made in the browser
- * and one made from Claude land in the same place. Returns false if unconfigured or
- * the write fails (e.g. tiles.sql not run yet).
- */
+/** Write a tile into the `tiles` table. False if unconfigured or the write fails. */
 export async function syncSaveTile(slot: string, html: string, name?: string): Promise<boolean> {
-  const c = syncClient()
-  if (!c) return false
-  try {
-    const { error } = await c
-      .from('tiles')
-      .upsert({ slot, html, name: name ?? null, updated_at: new Date().toISOString() }, { onConflict: 'slot' })
-    return !error
-  } catch {
-    return false
-  }
+  const r = await call<{ ok: boolean }>('/api/store/tiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slot, html, name: name ?? null }),
+  })
+  return r?.ok ?? false
 }
 
-/**
- * Wipe the owner's cloud data — every tile's saved data AND every tile they built
- * (the connector / "+ New tile" store). Used by the dashboard's Reset button. No-op
- * if sync is unconfigured. Best-effort; never throws.
- */
+/** Wipe every tile's data AND every built tile. Destructive; the server demands the confirm. */
 export async function syncWipe(): Promise<void> {
-  const c = syncClient()
-  if (!c) return
-  try {
-    // PostgREST refuses an unfiltered delete, so match every real row.
-    await c.from('tile_data').delete().neq('tile_id', '')
-    await c.from('tiles').delete().neq('slot', '')
-  } catch {
-    /* best-effort */
-  }
+  await call('/api/store/tiles', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: 'wipe' }),
+  })
 }

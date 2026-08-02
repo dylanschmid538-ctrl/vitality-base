@@ -78,13 +78,19 @@ const text = (t: string): ToolResult => ({ content: [{ type: 'text', text: t }] 
 const fail = (t: string): ToolResult => ({ content: [{ type: 'text', text: t }], isError: true })
 
 const NO_DB = fail(
-  'Supabase is not configured. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then run supabase/tiles.sql.',
+  'Supabase is not configured. Add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY, then run supabase/tiles.sql.',
 )
 
-/** Anon client (open RLS policy on a personal instance). Null if unconfigured. */
+/**
+ * Service client. This was the anon key, which stopped working the moment
+ * supabase/lockdown.sql revoked anon's grants — and had to, because that key
+ * shipped inside every browser bundle. This route runs server-side and does its
+ * own bearer / OAuth check above, so the secret key is the right credential
+ * here. Null if unconfigured.
+ */
 function db(): SupabaseClient | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const key = process.env.SUPABASE_SECRET_KEY
   if (!url || !key) return null
   return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
 }

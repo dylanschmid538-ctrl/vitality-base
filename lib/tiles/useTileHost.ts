@@ -181,7 +181,7 @@ export function useTileHost(
         src.postMessage({ source: 'vitality-host', type: 'save:ok', id: msg.id }, '*')
         // then mirror to the owner's Supabase (if configured) so the same data shows
         // up on their other devices. Fire-and-forget — never blocks the tile.
-        if (syncEnabled()) void syncSave(tileId, msg.data, new Date().toISOString())
+        if (syncEnabled()) void syncSave(tileId, msg.data)
         const count = Array.isArray(msg.data) ? msg.data.length : 0
         activity.current?.({ tileId, type: 'save', count })
         return

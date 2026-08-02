@@ -271,7 +271,16 @@ def main() -> None:
     if not files:
         raise SystemExit("Keine Datei angegeben.")
 
-    spending, diag = parse(read_rows(files[0]))
+    # Die Shell loest `Finanzassistent-*.xlsx` alphabetisch auf, und weil der
+    # Zeitstempel im Dateinamen steckt, stuende der AELTESTE Export vorn. Beim
+    # zweiten Monat haette das die neuen Zahlen still durch alte ersetzt.
+    # Also: juengste Datei gewinnt — und sie wird genannt, damit man es sieht.
+    chosen = max(files, key=os.path.getmtime)
+    if len(files) > 1:
+        print(f"{len(files)} Dateien uebergeben, juengste gewaehlt:", file=sys.stderr)
+    print(f"  {os.path.basename(chosen)}", file=sys.stderr)
+
+    spending, diag = parse(read_rows(chosen))
     payload = {"spending": spending, "spendingUpdated": date.today().isoformat()}
 
     if do_write:

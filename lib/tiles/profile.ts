@@ -26,8 +26,13 @@ export interface Profile {
   units?: 'metric' | 'imperial'
 }
 
-/** Blank until the mentor asks. Fallbacks live at the call sites. */
-export const DEFAULT_PROFILE: Profile = {}
+/** Answered 02.08.2026. `name` and `sex` still unasked — both stay optional. */
+export const DEFAULT_PROFILE: Profile = {
+  heightCm: 178,
+  weightKg: 93,
+  age: 20,
+  units: 'metric',
+}
 
 /** The profile: localStorage override ('vitality:profile') if valid, else defaults. */
 export function profile(): Profile {

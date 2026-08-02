@@ -225,9 +225,14 @@ function tabBar(){
 function render(){
   let html='';
   if(view==='networth'){
-    const any=accts().length||holds().length,v=any?netWorth():null,h=hist();
+    /* an unpriced holding is worth 0 to the maths, which made a real portfolio
+       render as "$0" — indistinguishable from a tile that never got its data.
+       Count only what can actually be valued, and say what is missing. */
+    const unpriced=holds().filter(x=>typeof x.price!=='number').length;
+    const valued=accts().length+(holds().length-unpriced),v=valued?netWorth():null,h=hist();
     let delta='';
     if(h.length>=2){const d=h[h.length-1].value-h[0].value,up=d>=0;delta='<div class="delta">since day one · <b class="'+(up?'':'down')+'">'+(up?'▲ ':'▼ ')+fmtMoney(Math.abs(d)).replace('−','')+'</b></div>';}
+    else if(unpriced)delta='<div class="delta">'+unpriced+' holding'+(unpriced===1?'':'s')+' without a live price'+(finNote?' · add a free Finnhub key to value '+(unpriced===1?'it':'them'):'')+'</div>';
     html='<div class="kick">✦ net worth</div><div class="worth'+(v!=null&&v<0?' neg':'')+'">'+fmtMoney(v)+'</div>'+delta
       +'<div class="gwrap">'+graph()+'</div><div class="list">'+listAccounts()+'</div>';
   }else if(view==='stocks'){

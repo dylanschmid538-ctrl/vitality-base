@@ -10,6 +10,9 @@ import { SESSION_COOKIE, validSession } from '@/lib/server/session'
  *   /login, /api/auth/*   — the gate itself; protecting it would lock everyone out.
  *   /api/mcp/*            — the Claude connector, which has its own bearer /
  *                           OAuth check. Password-gating it would break /sweep.
+ *   /api/health           — the Apple Health push from the iPhone Shortcut. Has
+ *                           its own HEALTH_TOKEN bearer; a Shortcut cannot hold
+ *                           a session cookie. Write-only, health numbers only.
  *   /tiles/*              — sealed tile HTML. Public source code, no user data;
  *                           the DATA behind it lives in /api/store and is gated.
  *   static assets, icons  — no data, and gating them breaks the PWA manifest.
@@ -43,6 +46,6 @@ export const config = {
      * allowlist, so a NEW route is protected by default — forgetting to add a
      * route here fails closed, not open.
      */
-    '/((?!login|api/auth|api/mcp|tiles/|_next/static|_next/image|favicon.ico|icon|apple-icon|manifest.webmanifest).*)',
+    '/((?!login|api/auth|api/mcp|api/health|tiles/|_next/static|_next/image|favicon.ico|icon|apple-icon|manifest.webmanifest).*)',
   ],
 }

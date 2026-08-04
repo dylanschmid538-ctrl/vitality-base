@@ -1,55 +1,46 @@
 import { db, dbConfigured } from '@/lib/server/db'
+import { METRICS, clean } from '@/lib/server/healthMetrics'
 
 /**
  * The door Apple Health knocks on.
  *
  * HealthKit has no cloud API — the data is encrypted on the phone and Apple
  * deliberately lets nobody query it from outside. So the pull does not exist;
- * the phone has to push. An Apple Shortcut (Kurzbefehle) reads the day's
- * samples and POSTs them here on a schedule. No App Store app, no developer
- * account, no third-party service holding the user's health data.
+ * the phone has to push. The companion iOS app watches HealthKit and POSTs
+ * here whenever new samples land.
  *
- * Nutrition rides the same wire: Yazio writes calories and macros into Apple
- * Health, so the Shortcut picks them up with everything else and this route
- * never has to know Yazio exists.
+ * Fitbit and Yazio both write into Apple Health, so neither needs its own
+ * integration: they arrive here as ordinary metrics and this route never has
+ * to know they exist.
  *
- * AUTH is a bearer token of its own (HEALTH_TOKEN), NOT the session cookie and
- * NOT MCP_TOKEN. A token that lives inside a Shortcut on a phone is the most
- * exposed credential in this project — it should be able to do exactly one
- * thing. This one writes health numbers and nothing else.
+ * The payload is an OPEN metric map, not a fixed set of fields. Which keys are
+ * legal, where they land and what counts as a sane value all live in
+ * lib/server/healthMetrics.ts — so a new metric is a server deploy, never a
+ * new build of the app.
  *
- * Therefore this route is excluded from the password gate in middleware.ts,
- * the same way /api/mcp is: it carries its own auth.
+ * AUTH is a bearer of its own (HEALTH_TOKEN), NOT the session cookie and NOT
+ * MCP_TOKEN. A token sitting inside an app on a phone is the most exposed
+ * credential in this project, so it can do exactly one thing: write health
+ * numbers. Hence the exclusion from the password gate in middleware.ts.
  */
-
-/** One day's numbers. Every field optional — a phone that logged nothing sends nothing. */
-interface Payload {
-  date?: string
-  sleepHours?: number
-  weightKg?: number
-  kcal?: number
-  protein?: number
-  carbs?: number
-  fat?: number
-  water?: number
-}
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
-/** Accept a number only when it is finite and in a range a human body produces. */
-function num(v: unknown, max: number): number | undefined {
-  return typeof v === 'number' && isFinite(v) && v >= 0 && v <= max ? Math.round(v * 100) / 100 : undefined
+/** One day. `metrics` keys are the names from /api/health/config. */
+interface Payload {
+  date?: string
+  metrics?: Record<string, unknown>
 }
 
 /**
- * Read a slot, apply `patch` to the decoded object, write it back under BOTH
- * keys. Two keys because lib/sync.ts writes the bare slot and tileStore writes
- * `me:<slot>`, and whichever is read first wins — updating one would leave the
- * dashboard showing whichever copy it happened to load.
+ * Read a slot, apply `patch`, write it back under BOTH keys. Two keys because
+ * lib/sync.ts writes the bare slot and tileStore writes `me:<slot>`, and
+ * whichever is read first wins — updating one would leave the dashboard
+ * showing whichever copy it happened to load.
  *
- * ponytail: read-modify-write with no locking. Two writers racing here would
- * need the Shortcut and a manual save in the same second; if that ever
- * actually collides, the fix is a Postgres jsonb merge, not a lock.
+ * ponytail: read-modify-write, no locking. Two writers would have to collide
+ * inside the same second; if that ever actually happens, the fix is a Postgres
+ * jsonb merge, not a lock.
  */
 async function mergeSlot(slot: string, patch: (data: Record<string, unknown>) => void): Promise<void> {
   const c = db()!
@@ -63,6 +54,20 @@ async function mergeSlot(slot: string, patch: (data: Record<string, unknown>) =>
       .from('tile_data')
       .upsert({ tile_id: key, data: current, updated_at: new Date().toISOString() }, { onConflict: 'tile_id' })
   }
+}
+
+/** Walk to `data[group][date]` (or `data[date]`), creating plain objects on the way. */
+function dayBucket(data: Record<string, unknown>, group: string | undefined, date: string): Record<string, unknown> {
+  let parent = data
+  if (group) {
+    const g = data[group]
+    parent = (g && typeof g === 'object' && !Array.isArray(g) ? g : {}) as Record<string, unknown>
+    data[group] = parent
+  }
+  const d = parent[date]
+  const bucket = (d && typeof d === 'object' && !Array.isArray(d) ? d : {}) as Record<string, unknown>
+  parent[date] = bucket
+  return bucket
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -80,55 +85,49 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: 'bad_json' }, { status: 400 })
   }
 
-  // The Shortcut sends the day it read. Fall back to today rather than
-  // rejecting, so a malformed date never silently drops a night's sleep.
+  // The app sends the day it read. Fall back to today rather than rejecting,
+  // so a malformed date never silently drops a night's sleep.
   const date = typeof body.date === 'string' && DATE_RE.test(body.date)
     ? body.date
     : new Date().toISOString().slice(0, 10)
 
-  const sleepHours = num(body.sleepHours, 24)
-  const weightKg = num(body.weightKg, 400)
-  const kcal = num(body.kcal, 20000)
-  const protein = num(body.protein, 1000)
-  const carbs = num(body.carbs, 2000)
-  const fat = num(body.fat, 1000)
-  const water = num(body.water, 50)
+  const incoming = body.metrics && typeof body.metrics === 'object' ? body.metrics : {}
 
-  const wrote: string[] = []
+  // Group the accepted values by the slot they belong to, so each slot is
+  // read and written ONCE no matter how many metrics arrived.
+  const bySlot = new Map<string, Array<[string, string | undefined, number]>>()
+  const accepted: string[] = []
+  const rejected: string[] = []
 
-  if (sleepHours != null || weightKg != null) {
-    await mergeSlot('vitals', (d) => {
-      const day = (d[date] && typeof d[date] === 'object' ? d[date] : {}) as Record<string, unknown>
-      if (sleepHours != null) day.sleepHours = sleepHours
-      if (weightKg != null) day.weightKg = weightKg
-      d[date] = day
-    })
-    wrote.push('vitals')
+  for (const [key, raw] of Object.entries(incoming)) {
+    const value = clean(key, raw)
+    if (value == null) {
+      rejected.push(key)
+      continue
+    }
+    const spec = METRICS[key]
+    const list = bySlot.get(spec.slot) || []
+    list.push([key, spec.group, value])
+    bySlot.set(spec.slot, list)
+    accepted.push(key)
   }
 
-  const hasNutrition = kcal != null || protein != null || carbs != null || fat != null
-  if (hasNutrition || water != null) {
-    await mergeSlot('fuel', (d) => {
-      if (hasNutrition) {
-        const n = (d.nutrition && typeof d.nutrition === 'object' ? d.nutrition : {}) as Record<string, unknown>
-        const day = (n[date] && typeof n[date] === 'object' ? n[date] : {}) as Record<string, unknown>
-        if (kcal != null) day.kcal = kcal
-        if (protein != null) day.protein = protein
-        if (carbs != null) day.carbs = carbs
-        if (fat != null) day.fat = fat
-        n[date] = day
-        d.nutrition = n
-      }
-      if (water != null) {
-        const w = (d.water && typeof d.water === 'object' ? d.water : {}) as Record<string, unknown>
-        w[date] = water
-        d.water = w
+  for (const [slot, entries] of bySlot) {
+    await mergeSlot(slot, (data) => {
+      for (const [key, group, value] of entries) {
+        dayBucket(data, group, date)[key] = value
       }
     })
-    wrote.push('fuel')
   }
 
-  // An empty push is not an error — the Shortcut ran on a day with no data.
-  // Say so plainly so the phone's run log shows why nothing changed.
-  return Response.json({ ok: true, date, wrote, empty: wrote.length === 0 })
+  // An empty push is not an error — the app ran on a day with nothing new.
+  // Naming the rejected keys matters: that is how a wrong unit or a stale app
+  // config shows up, instead of a metric quietly never arriving.
+  return Response.json({
+    ok: true,
+    date,
+    accepted,
+    rejected,
+    slots: [...bySlot.keys()],
+  })
 }

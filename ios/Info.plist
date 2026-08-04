@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Ohne diese beiden Texte stuerzt iOS beim ersten HealthKit-Zugriff ab. -->
+  <key>NSHealthShareUsageDescription</key>
+  <string>Vitality Sync liest Schlaf, Aktivität und Ernährung aus Health und überträgt sie an dein eigenes Dashboard.</string>
+  <key>NSHealthUpdateUsageDescription</key>
+  <string>Vitality Sync schreibt nichts nach Health — es liest nur.</string>
+  <!-- Erlaubt das Aufwachen, wenn HealthKit neue Daten bekommt. Das ist der
+       Punkt, an dem sich diese App von einem Kurzbefehl unterscheidet. -->
+  <key>UIBackgroundModes</key>
+  <array><string>processing</string></array>
+</dict>
+</plist>

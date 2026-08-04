@@ -1,0 +1,4 @@
+# Die iOS-App gehoert nicht ins Web-Deployment. Next baut sie nicht, aber
+# ohne diese Zeile wandert der ganze Ordner bei jedem Deploy mit hoch.
+ios/
+scripts/

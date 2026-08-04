@@ -93,3 +93,10 @@ supabase/.temp/
 public/*-preview.html
 /explain-*.png
 /pol-*.png
+
+# Xcode (ios/) — Buildartefakte und persoenliche Editor-Zustaende
+ios/build/
+ios/DerivedData/
+**/xcuserdata/
+*.xcuserstate
+*.xcscmblueprint

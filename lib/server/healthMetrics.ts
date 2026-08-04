@@ -33,15 +33,21 @@ export interface MetricSpec {
   slot: 'vitals' | 'fuel'
   /** Optional nesting inside the slot, e.g. fuel.nutrition.<date>.protein */
   group?: string
+  /**
+   * Sleep only. Deep and REM are not TYPES in HealthKit — they are VALUES of
+   * HKCategoryTypeIdentifierSleepAnalysis. Querying them as a type finds
+   * nothing at all, silently. The app filters samples by this instead.
+   */
+  stage?: 'asleep' | 'deep' | 'rem' | 'core'
 }
 
 export const METRICS: Record<string, MetricSpec> = {
   // ── Schlaf ────────────────────────────────────────────────────────────────
   // Category type, not a number: HealthKit stores segments with start/end, so
   // the app sums durations. Several segments per night is normal.
-  sleepHours: { hk: 'HKCategoryTypeIdentifierSleepAnalysis', unit: 'h', agg: 'total', max: 24, slot: 'vitals' },
-  sleepDeep: { hk: 'HKCategoryValueSleepAnalysisAsleepDeep', unit: 'h', agg: 'total', max: 24, slot: 'vitals' },
-  sleepRem: { hk: 'HKCategoryValueSleepAnalysisAsleepREM', unit: 'h', agg: 'total', max: 24, slot: 'vitals' },
+  sleepHours: { hk: 'HKCategoryTypeIdentifierSleepAnalysis', unit: 'h', agg: 'total', max: 24, slot: 'vitals', stage: 'asleep' },
+  sleepDeep: { hk: 'HKCategoryTypeIdentifierSleepAnalysis', unit: 'h', agg: 'total', max: 24, slot: 'vitals', stage: 'deep' },
+  sleepRem: { hk: 'HKCategoryTypeIdentifierSleepAnalysis', unit: 'h', agg: 'total', max: 24, slot: 'vitals', stage: 'rem' },
 
   // ── Herz ──────────────────────────────────────────────────────────────────
   restingHR: { hk: 'HKQuantityTypeIdentifierRestingHeartRate', unit: 'count/min', agg: 'avg', max: 250, slot: 'vitals' },
@@ -80,6 +86,7 @@ export function metricConfig() {
     type: m.hk,
     unit: m.unit,
     aggregate: m.agg,
+    ...(m.stage ? { stage: m.stage } : {}),
   }))
 }
 

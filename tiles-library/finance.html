@@ -12,8 +12,13 @@
 
   Sealed: no network. Saves through window.Vitality. Stock prices via the host
   bridge: window.Vitality.stock(symbol) (server-routed Finnhub key; manual works
-  keyless). Store: { accounts:[{id,name,balance}], holdings:[{id,symbol,shares,price}],
-  subs:[{id,name,amount}], history:[{t,value}] }
+  keyless). Store: { accounts:[{id,name,balance}], holdings:[{id,symbol,shares,price,cost,since}],
+  subs:[{id,name,amount,period,next}], history:[{t,value}] }
+
+  period is 'monthly' | 'yearly' | 'weekly'; missing counts as monthly, so rows
+  written before this field keep working. The burn always normalises to a month,
+  so a yearly bill is stored at its REAL amount instead of being smuggled in as
+  a monthly one. cost = total invested, since = purchase date (both optional).
 -->
 <style>
   :root{
@@ -75,6 +80,13 @@
   .keyNote{font-family:var(--mono);font-size:10px;letter-spacing:.02em;color:var(--muted);margin-top:12px;text-align:center}
   .keyNote b{color:var(--brand)}
   /* the bottom tab bar — each button is a page */
+  .val{font-family:var(--mono);font-size:14px;font-variant-numeric:tabular-nums;color:var(--muted-strong)}
+  .sbar{height:3px;border-radius:2px;background:var(--border);margin-top:7px;width:100%;max-width:190px;overflow:hidden}
+  .sbar i{display:block;height:100%;background:var(--brand);border-radius:2px}
+  .mnav{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:20px}
+  .mbtn{width:32px;height:32px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--muted);font:inherit;font-size:15px;cursor:pointer}
+  .mbtn:disabled{opacity:.3;cursor:default}
+  .mlab{font-size:12.5px;letter-spacing:.06em;color:var(--muted);min-width:74px;text-align:center}
   .tabBar{display:flex;gap:6px;margin-top:30px;padding-top:18px;border-top:1px solid var(--border)}
   .tab{flex:1;padding:12px 8px;border-radius:12px;border:1px solid var(--border);background:transparent;color:var(--muted);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:all .15s}
   .tab:hover{color:#fff;border-color:var(--muted)}
@@ -91,6 +103,7 @@
 </div>
 <script>
 let store={};let view='networth';
+let spendMonth=null;
 let editingId=null;let editKind='bal';let adding=false;let addingStock=false;let addingSub=false;
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fetchingS=new Set();let finNote=false;
@@ -101,7 +114,23 @@ function subs(){if(!Array.isArray(store.subs))store.subs=[];return store.subs}
 function hist(){if(!Array.isArray(store.history))store.history=[];return store.history}
 function holdValue(h){return (typeof h.shares==='number'?h.shares:0)*(typeof h.price==='number'?h.price:0)}
 function stockTotal(){return holds().reduce((s,h)=>s+holdValue(h),0)}
-function monthlyBurn(){return subs().reduce((s,x)=>s+(typeof x.amount==='number'?x.amount:0),0)}
+/* a yearly bill is not a monthly one: normalise before summing, never before storing */
+const PERIODS={monthly:{label:'monthly',per:'/mo',toMonthly:v=>v},yearly:{label:'yearly',per:'/yr',toMonthly:v=>v/12},weekly:{label:'weekly',per:'/wk',toMonthly:v=>v*52/12}};
+function periodOf(x){return PERIODS[x&&x.period]||PERIODS.monthly}
+function subMonthly(x){return periodOf(x).toMonthly(typeof x.amount==='number'?x.amount:0)}
+function monthlyBurn(){return subs().reduce((s,x)=>s+subMonthly(x),0)}
+/* days until the next charge; null when no date is stored */
+function daysToNext(x){
+  if(!x||!x.next)return null;
+  const p=String(x.next).split('-').map(Number);if(p.length!==3||!p[0])return null;
+  const d=new Date(p[0],p[1]-1,p[2]);const t=new Date();t.setHours(0,0,0,0);
+  return Math.round((d-t)/86400000);
+}
+function nextLabel(x){
+  const n=daysToNext(x);if(n==null)return '';
+  if(n<0)return ' · overdue';
+  return ' · '+(n===0?'today':n===1?'tomorrow':'in '+n+'d');
+}
 function netWorth(){let s=0;for(const a of accts())s+=(typeof a.balance==='number'?a.balance:0);for(const h of holds())s+=holdValue(h);return s;}
 function fmtMoney(n){if(n==null)return '—';const sign=n<0?'−':'';const a=Math.abs(n);
   return sign+'$'+(a>=1e6?(a/1e6).toFixed(2)+'M':a>=1e4?Math.round(a).toLocaleString():a.toLocaleString(undefined,{maximumFractionDigits:0}));}
@@ -164,12 +193,18 @@ function listStocks(){
   let h='';
   for(const hd of holds()){
     const px=typeof hd.price==='number'?hd.price:null;
-    const sub=(typeof hd.shares==='number'?hd.shares:0)+' sh'+(px!=null?' @ '+fmtMoney(px):' · '+(fetchingS.has(hd.id)?'pricing…':'add a key to price'));
+    /* the gain only shows once BOTH sides are real: a live price and a cost
+       basis. One without the other would be a number pretending to be a result */
+    const cost=typeof hd.cost==='number'?hd.cost:null;
+    let gain='';
+    if(cost!=null&&px!=null){const g=holdValue(hd)-cost;gain=' · '+(g>=0?'+':'')+fmtMoney(g);}
+    else if(cost!=null){gain=' · cost '+fmtMoney(cost);}
+    const sub=(typeof hd.shares==='number'?hd.shares:0)+' sh'+(px!=null?' @ '+fmtMoney(px):' · '+(fetchingS.has(hd.id)?'pricing…':'add a key to price'))+gain;
     h+='<div class="row"><div class="nmwrap"><span class="nm">'+esc(hd.symbol)+'</span><div class="hsub">'+sub+'</div></div>'
       +valCell(hd.id,'sh',(typeof hd.shares==='number'?hd.shares:''),false)+(editingId===hd.id?'':(fetchingS.has(hd.id)?'…':fmtMoney(holdValue(hd)))+'</span>')
       +'<button class="del" data-del="'+hd.id+'" title="Remove">&times;</button></div>';
   }
-  if(addingStock)h+='<div class="addRow stock"><input id="symIn" placeholder="ticker — e.g. AAPL" autocomplete="off"/><input id="shIn" type="text" inputmode="decimal" placeholder="shares" autocomplete="off"/><button data-addstockgo>Add</button></div>';
+  if(addingStock)h+='<div class="addRow stock"><input id="symIn" placeholder="ticker — e.g. AAPL" autocomplete="off"/><input id="shIn" type="text" inputmode="decimal" placeholder="shares" autocomplete="off"/><input id="costIn" type="text" inputmode="decimal" placeholder="invested (optional)" autocomplete="off"/><input id="sinceIn" type="date" title="bought on"/><button data-addstockgo>Add</button></div>';
   else h+='<button class="addBtn" data-addstock>+ Add stock</button>';
   if(finNote)h+='<div class="keyNote">stocks need a free <b>Finnhub key</b> in .env.local — your mentor sets it up. Until then they hold at $0.</div>';
   return h;
@@ -177,36 +212,101 @@ function listStocks(){
 function listSubs(){
   let h='';
   for(const sb of subs()){
-    h+='<div class="row"><div class="nmwrap"><span class="nm">'+esc(sb.name)+'</span><div class="hsub">subscription</div></div>'
-      +valCell(sb.id,'sub',(typeof sb.amount==='number'?sb.amount:''),false)+(editingId===sb.id?'':fmtMoney(typeof sb.amount==='number'?sb.amount:0)+'/mo</span>')
+    const P=periodOf(sb);
+    /* show the real amount at its real period; the monthly equivalent only
+       tags along when the two differ, so nothing reads as a monthly bill */
+    const mo=P===PERIODS.monthly?'':' · '+fmtMoney(subMonthly(sb))+'/mo';
+    h+='<div class="row"><div class="nmwrap"><span class="nm">'+esc(sb.name)+'</span><div class="hsub">'+P.label+mo+esc(nextLabel(sb))+'</div></div>'
+      +valCell(sb.id,'sub',(typeof sb.amount==='number'?sb.amount:''),false)+(editingId===sb.id?'':fmtMoney(typeof sb.amount==='number'?sb.amount:0)+P.per+'</span>')
       +'<button class="del" data-del="'+sb.id+'" title="Remove">&times;</button></div>';
   }
-  if(addingSub)h+='<div class="addRow"><input id="subNmIn" placeholder="subscription — e.g. Netflix" autocomplete="off"/><input id="subAmtIn" type="text" inputmode="decimal" placeholder="$ / month" autocomplete="off"/><button data-addsubgo>Add</button></div>';
+  if(addingSub)h+='<div class="addRow"><input id="subNmIn" placeholder="subscription — e.g. Netflix" autocomplete="off"/><input id="subAmtIn" type="text" inputmode="decimal" placeholder="amount" autocomplete="off"/><select id="subPerIn"><option value="monthly">monthly</option><option value="yearly">yearly</option><option value="weekly">weekly</option></select><input id="subNextIn" type="date" title="next charge"/><button data-addsubgo>Add</button></div>';
   else h+='<button class="addBtn" data-addsub>+ Add subscription</button>';
   return h;
 }
 
+/* ── Ausgaben ────────────────────────────────────────────────────────────────
+   Monatssummen pro Kategorie, eingelesen von scripts/import-spending.py aus dem
+   Raiffeisen-Transaktionsexport. Absichtlich KEINE Einzelbuchungen: gefragt war
+   "Coop, Migros, Aldi 200 im Monat", nicht eine Liste von 632 Zeilen — und
+   Summen brauchen keine perfekte Kategorisierung, eine falsch einsortierte
+   Zahlung von 4.50 faellt in einer Summe nicht auf. */
+/* Ausgaben kommen aus einem Schweizer Konto, Netto-Vermoegen aus US-Boersen.
+   Zwei Waehrungen im selben Tile — dann muessen sie auch zwei Zeichen haben,
+   sonst liest man CHF 2'909 als Dollar. */
+function fmtCHF(n){if(n==null)return '—';const a=Math.abs(n);
+  return (n<0?'−':'')+"CHF "+a.toLocaleString('de-CH',{maximumFractionDigits:0});}
+function spend(){return (store.spending&&typeof store.spending==='object')?store.spending:{}}
+function spendMonths(){return Object.keys(spend()).sort()}
+function monthLabel(m){
+  const p=String(m).split('-'), names=['Jan','Feb','März','Apr','Mai','Juni','Juli','Aug','Sept','Okt','Nov','Dez'];
+  return (names[Number(p[1])-1]||p[1])+' '+p[0];
+}
+function spendingView(){
+  const ms=spendMonths();
+  if(!ms.length){
+    /* Der Leerzustand sagt WARUM er leer ist. Ein Tile, das ohne Grund leer
+       aussieht, wird fuer kaputt gehalten — genau das ist hier schon passiert. */
+    return '<div class="kick">✦ Ausgaben</div><div class="worth">—</div>'
+      +'<div class="delta">noch kein Kontoauszug eingelesen</div>'
+      +'<div class="gEmpty" style="margin-top:26px">E-Banking → Finanzassistent → <b>Transaktionen</b> exportieren, '
+      +'dann <b>scripts/import-spending.py</b> darauf laufen lassen</div>';
+  }
+  if(spendMonth==null||ms.indexOf(spendMonth)<0)spendMonth=ms[ms.length-1];
+  const i=ms.indexOf(spendMonth), row=spend()[spendMonth]||{};
+  const total=Object.keys(row).reduce((s,k)=>s+(typeof row[k]==='number'?row[k]:0),0);
+  const avg=ms.reduce((s,m)=>s+Object.keys(spend()[m]).reduce((a,k)=>a+spend()[m][k],0),0)/ms.length;
+  const diff=total-avg, up=diff>=0;
+
+  let list='';
+  Object.keys(row).sort((a,b)=>row[b]-row[a]).forEach(function(k){
+    const pct=total?row[k]/total*100:0;
+    list+='<div class="row"><div class="nmwrap"><span class="nm">'+esc(k)+'</span>'
+      +'<div class="sbar"><i style="width:'+pct.toFixed(1)+'%"></i></div></div>'
+      +'<span class="val">'+fmtCHF(row[k])+'<div class="hsub" style="text-align:right">'+pct.toFixed(0)+'%</div></span></div>';
+  });
+
+  return '<div class="kick">✦ Ausgaben</div>'
+    +'<div class="worth">'+fmtCHF(total)+'</div>'
+    +'<div class="delta">'+monthLabel(spendMonth)+' · <b class="'+(up?'down':'')+'">'
+      +(up?'▲ ':'▼ ')+fmtCHF(Math.abs(diff))+'</b> gegenüber dem Schnitt</div>'
+    +'<div class="mnav">'
+      +'<button class="mbtn" data-mo="-1"'+(i<=0?' disabled':'')+'>‹</button>'
+      +'<span class="mlab">'+monthLabel(spendMonth)+'</span>'
+      +'<button class="mbtn" data-mo="1"'+(i>=ms.length-1?' disabled':'')+'>›</button>'
+    +'</div>'
+    +'<div class="list" style="margin-top:18px">'+list+'</div>'
+    +(store.spendingUpdated?'<div class="hsub" style="text-align:center;margin-top:16px">Stand '+esc(store.spendingUpdated)+'</div>':'');
+}
+
 function tabBar(){
-  return '<div class="tabBar">'+[['networth','Net worth'],['stocks','Stocks'],['subs','Subs']]
+  return '<div class="tabBar">'+[['networth','Net worth'],['stocks','Stocks'],['subs','Subs'],['spend','Ausgaben']]
     .map(t=>'<button class="tab'+(view===t[0]?' on':'')+'" data-view="'+t[0]+'">'+t[1]+'</button>').join('')+'</div>';
 }
 
 function render(){
   let html='';
   if(view==='networth'){
-    const any=accts().length||holds().length,v=any?netWorth():null,h=hist();
+    /* an unpriced holding is worth 0 to the maths, which made a real portfolio
+       render as "$0" — indistinguishable from a tile that never got its data.
+       Count only what can actually be valued, and say what is missing. */
+    const unpriced=holds().filter(x=>typeof x.price!=='number').length;
+    const valued=accts().length+(holds().length-unpriced),v=valued?netWorth():null,h=hist();
     let delta='';
     if(h.length>=2){const d=h[h.length-1].value-h[0].value,up=d>=0;delta='<div class="delta">since day one · <b class="'+(up?'':'down')+'">'+(up?'▲ ':'▼ ')+fmtMoney(Math.abs(d)).replace('−','')+'</b></div>';}
+    else if(unpriced)delta='<div class="delta">'+unpriced+' holding'+(unpriced===1?'':'s')+' without a live price'+(finNote?' · add a free Finnhub key to value '+(unpriced===1?'it':'them'):'')+'</div>';
     html='<div class="kick">✦ net worth</div><div class="worth'+(v!=null&&v<0?' neg':'')+'">'+fmtMoney(v)+'</div>'+delta
       +'<div class="gwrap">'+graph()+'</div><div class="list">'+listAccounts()+'</div>';
   }else if(view==='stocks'){
     html='<div class="kick">✦ holdings</div><div class="worth">'+(holds().length?fmtMoney(stockTotal()):'—')+'</div>'
       +(holds().length?'<div class="delta">'+holds().length+' position'+(holds().length===1?'':'s')+' · live-priced</div>':'')
       +'<div class="list" style="margin-top:24px">'+listStocks()+'</div>';
-  }else{
+  }else if(view==='subs'){
     html='<div class="kick">✦ monthly burn</div><div class="worth">'+(subs().length?fmtMoney(monthlyBurn())+'<span class="u">/mo</span>':'—')+'</div>'
-      +(subs().length?'<div class="delta">'+subs().length+' renewal'+(subs().length===1?'':'s')+' a month</div>':'')
+      +(subs().length?'<div class="delta">'+subs().length+' subscription'+(subs().length===1?'':'s')+' · normalised to a month</div>':'')
       +'<div class="list" style="margin-top:24px">'+listSubs()+'</div>';
+  }else{
+    html=spendingView();
   }
   html+=tabBar();
   document.getElementById('app').innerHTML=html;
@@ -242,18 +342,27 @@ function addStock(){
   const s=document.getElementById('symIn'),sh=document.getElementById('shIn');
   const symbol=(s?s.value:'').trim().toUpperCase();if(!symbol){if(s)s.focus();return;}
   const raw=String(sh?sh.value:'').replace(/[,\s]/g,'');const shares=Number(raw);
-  const hd={id:'h'+Math.random().toString(36).slice(2,8),symbol,shares:(raw!==''&&isFinite(shares))?shares:0,price:null};
+  const c=document.getElementById('costIn'),si=document.getElementById('sinceIn');
+  const craw=String(c?c.value:'').replace(/[$,\s]/g,'');const cost=Number(craw);
+  const hd={id:'h'+Math.random().toString(36).slice(2,8),symbol,shares:(raw!==''&&isFinite(shares))?shares:0,price:null,
+    cost:(craw!==''&&isFinite(cost))?cost:null,since:(si&&si.value)?si.value:null};
   holds().push(hd);addingStock=false;persist();render();refreshStock(hd);
 }
 function addSub(){
   const n=document.getElementById('subNmIn'),amt=document.getElementById('subAmtIn');
   const name=(n?n.value:'').trim();if(!name){if(n)n.focus();return;}
   const raw=String(amt?amt.value:'').replace(/[$,\s]/g,'');const amount=Number(raw);
-  subs().push({id:'s'+Math.random().toString(36).slice(2,8),name,amount:(raw!==''&&isFinite(amount))?amount:0});
+  const per=document.getElementById('subPerIn'),nx=document.getElementById('subNextIn');
+  const period=(per&&PERIODS[per.value])?per.value:'monthly';
+  const next=(nx&&nx.value)?nx.value:null;
+  subs().push({id:'s'+Math.random().toString(36).slice(2,8),name,amount:(raw!==''&&isFinite(amount))?amount:0,period,next});
   addingSub=false;persist();render();
 }
 
 document.addEventListener('click',e=>{
+  const mo=e.target.closest('[data-mo]');
+  if(mo){const ms=spendMonths(),i=ms.indexOf(spendMonth)+Number(mo.getAttribute('data-mo'));
+    if(i>=0&&i<ms.length){spendMonth=ms[i];render();}return}
   const tab=e.target.closest('[data-view]');
   if(tab){view=tab.getAttribute('data-view');editingId=null;adding=addingStock=addingSub=false;render();return}
   const b=e.target.closest('[data-bal]');

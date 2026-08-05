@@ -8,8 +8,16 @@
   FUEL — almost nothing, on purpose. One number (water today), one button.
   The week draws itself underneath. Everything else this tile could become
   (macros, meals, caffeine) gets built WITH the mentor, on top of this.
-  Store: { water: { 'YYYY-MM-DD': count } } — /sweep and save_data can file
-  straight into it.
+  Store: { water:  { 'YYYY-MM-DD': count },
+           nutrition: { 'YYYY-MM-DD': {kcal,protein,carbs,fat} },  <- Apple Health
+           supps:  [ {id,name,dose,time} ],        <- der Plan, von Hand gepflegt
+           taken:  { 'YYYY-MM-DD': [suppId,...] } }<- was heute wirklich drin war
+
+  Ernaehrung kommt aus Yazio -> Apple Health -> iPhone-Kurzbefehl -> /api/health.
+  Dieses Tile fragt nichts ab, es zeigt nur, was dort ankam.
+
+  Supplements sind KEIN Import: Apple Health kennt "Kreatin um 8 Uhr" nicht.
+  Deshalb Plan + Abhaken, und beides gehoert dem Nutzer.
 -->
 <style>
   :root{
@@ -60,13 +68,35 @@
   .foot{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-top:34px}
   .starterTag{width:max-content;max-width:92%;margin:0 auto 20px;padding:6px 14px;border:1px solid rgba(110,231,183,.25);border-radius:999px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#84848c;text-align:center}
   .starterTag,.starterTag *{line-height:1.6}
+  .sec{margin-top:34px;padding-top:24px;border-top:1px solid var(--border)}
+  .secHead{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--brand);margin-bottom:16px}
+  .macros{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .macro{padding:12px 6px;border:1px solid var(--border);border-radius:12px;background:rgba(14,14,17,.5)}
+  .macro b{display:block;font-family:var(--mono);font-size:17px;color:var(--fg);font-variant-numeric:tabular-nums}
+  .macro span{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .none{color:var(--muted);font-size:12.5px;padding:14px 0;line-height:1.6}
+  .none b{color:var(--brand)}
+  .sup{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--border);border-radius:12px;background:rgba(14,14,17,.5);margin-bottom:8px;text-align:left}
+  .sup.on{border-color:var(--brand);background:rgba(110,231,183,.07)}
+  .tick{width:22px;height:22px;border-radius:7px;border:1.5px solid var(--border);flex:none;cursor:pointer;background:transparent;color:#04140d;font-size:13px;line-height:1;font-weight:700}
+  .sup.on .tick{background:var(--brand);border-color:var(--brand)}
+  .supNm{flex:1;min-width:0;font-size:14px}
+  .supNm i{display:block;font-style:normal;font-family:var(--mono);font-size:10px;letter-spacing:.05em;color:var(--muted);margin-top:2px}
+  .rm{border:none;background:none;color:var(--muted);cursor:pointer;font-size:15px;opacity:.4;padding:2px 4px}
+  .rm:hover{opacity:1;color:#ff6b6b}
+  .addRow{display:grid;grid-template-columns:1fr 78px 84px auto;gap:7px;margin-top:4px}
+  .addRow input{background:rgba(14,14,17,.7);border:1px solid var(--border);border-radius:10px;padding:9px 11px;color:var(--fg);font:inherit;font-size:13px;outline:none;min-width:0}
+  .addRow input:focus{border-color:var(--brand)}
+  .addRow button{border:none;background:var(--brand);color:#04140d;font-weight:700;border-radius:10px;padding:0 14px;cursor:pointer}
+  .addSup{margin-top:4px;background:transparent;border:1px dashed var(--border);border-radius:10px;color:var(--muted);font:inherit;font-size:12.5px;padding:10px 14px;cursor:pointer;width:100%}
+  .addSup:hover{color:var(--brand);border-color:var(--brand);border-style:solid}
 </style>
 </head>
 <body>
 <div class="shell">
 <div class="starterTag">✦ starter — the value is what you build · the videos show how</div>
   <h1>Fuel</h1>
-  <p class="sub">water today · that's it — build the rest with your mentor</p>
+  <p class="sub">wasser · ernährung · supplements</p>
   <div class="well" id="app"></div>
 </div>
 <script>
@@ -75,6 +105,67 @@ let store={};
 function key(d){const x=d||new Date();return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');}
 function persist(){window.Vitality.save(store)}
 function today(){if(!store.water||typeof store.water!=='object')store.water={};return store.water}
+/* Was Apple Health geliefert hat. Leer, solange der Kurzbefehl nicht laeuft. */
+function nutri(){if(!store.nutrition||typeof store.nutrition!=='object')store.nutrition={};return store.nutrition}
+/* Der Supplement-PLAN: was du regelmaessig nimmst. Von Hand gepflegt, weil
+   Apple Health "Kreatin um 8 Uhr" nicht kennt. */
+function supps(){if(!Array.isArray(store.supps))store.supps=[];return store.supps}
+/* Was an EINEM Tag wirklich genommen wurde. Getrennt vom Plan, sonst
+   koennte man die Historie nicht mehr von der Absicht unterscheiden. */
+function taken(k){if(!store.taken||typeof store.taken!=='object')store.taken={};
+  if(!Array.isArray(store.taken[k]))store.taken[k]=[];return store.taken[k]}
+const esc=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function macroBlock(){
+  const n=nutri()[key()];
+  if(!n||typeof n!=='object'){
+    /* Der Leerzustand nennt den Grund. Ein Tile, das ohne Erklaerung leer
+       aussieht, wird fuer kaputt gehalten — genau das ist hier schon passiert. */
+    return '<div class="none">noch nichts von heute angekommen.<br>Kommt aus <b>Yazio → Apple Health → Kurzbefehl</b>, sobald der laeuft.</div>';
+  }
+  /* Zucker und Ballaststoffe stehen bewusst hinter den vier Hauptwerten und
+     erscheinen nur, wenn Yazio sie geliefert hat — sonst waeren es zwei
+     Gedankenstriche, die jeden Tag Platz wegnehmen ohne etwas zu sagen. */
+  const f=[['kcal',n.kcal,''],['protein',n.protein,'g'],['carbs',n.carbs,'g'],['fat',n.fat,'g'],
+           ['zucker',n.sugar,'g'],['ballast',n.fiber,'g']]
+    .filter(function(x,i){return i<4||typeof x[1]==='number'});
+  let h='<div class="macros">'+f.map(function(x){
+    return '<div class="macro"><b>'+(typeof x[1]==='number'?Math.round(x[1])+x[2]:'—')+'</b><span>'+x[0]+'</span></div>';
+  }).join('')+'</div>';
+  if(typeof n.waterLiters==='number'){
+    /* Liter aus Health, getrennt vom Glaeserzaehler oben — zwei Messungen
+       derselben Sache, die nicht vermischt werden duerfen. */
+    h+='<div class="none" style="padding-top:10px">'+n.waterLiters.toFixed(1)+' l laut Health</div>';
+  }
+  return h;
+}
+
+function suppBlock(){
+  const k=key(),t=taken(k);
+  let h='';
+  supps().forEach(function(sp){
+    const on=t.indexOf(sp.id)>=0;
+    h+='<div class="sup'+(on?' on':'')+'">'
+      +'<button class="tick" data-take="'+sp.id+'" aria-pressed="'+on+'" aria-label="'+esc(sp.name)+' abhaken">'+(on?'✓':'')+'</button>'
+      +'<div class="supNm">'+esc(sp.name)+'<i>'+esc(sp.dose||'')+(sp.dose&&sp.time?' · ':'')+esc(sp.time||'')+'</i></div>'
+      +'<button class="rm" data-rmsup="'+sp.id+'" title="Entfernen">&times;</button></div>';
+  });
+  if(adding){
+    h+='<div class="addRow"><input id="sNm" placeholder="z. B. Kreatin" autocomplete="off"/>'
+      +'<input id="sDose" placeholder="5 g" autocomplete="off"/>'
+      +'<input id="sTime" type="time"/>'
+      +'<button data-addgo>Add</button></div>';
+  }else{
+    h+='<button class="addSup" data-addsup>+ Supplement</button>';
+  }
+  if(supps().length){
+    h='<div class="none" style="padding:0 0 12px">'+t.length+' von '+supps().length+' heute genommen</div>'+h;
+  }
+  return h;
+}
+
+let adding=false;
+
 function render(){
   const w=today(),n=w[key()]||0;
   let bars='';
@@ -90,13 +181,42 @@ function render(){
     +'<div class="of">of '+GOAL+' today</div>'
     +'<div class="btnRow"><button class="minus" data-d="-1" aria-label="Remove one">−</button><button class="glass" data-d="1">+ Log a glass</button></div>'
     +'<div class="week">'+bars+'</div>'
+    +'<div class="sec"><div class="secHead">✦ ernährung heute</div>'+macroBlock()+'</div>'
+    +'<div class="sec"><div class="secHead">✦ supplements</div>'+suppBlock()+'</div>'
     +'<p class="foot">feeds your peak score · the mentor notices the pattern</p>';
+  if(adding){const i=document.getElementById('sNm');if(i)i.focus();
+    const d=document.getElementById('sDose');
+    if(d)d.addEventListener('keydown',e=>{if(e.key==='Enter')addSupp()});}
+}
+
+function addSupp(){
+  const nm=(document.getElementById('sNm')||{}).value||'';
+  if(!nm.trim()){adding=false;render();return}
+  supps().push({id:'s'+Date.now().toString(36),name:nm.trim(),
+    dose:((document.getElementById('sDose')||{}).value||'').trim(),
+    time:((document.getElementById('sTime')||{}).value||'').trim()});
+  adding=false;persist();render();
 }
 document.addEventListener('click',e=>{
-  const b=e.target.closest('[data-d]');if(!b)return;
-  const w=today(),k=key();
-  w[k]=Math.max(0,(w[k]||0)+parseInt(b.getAttribute('data-d'),10));
-  persist();render();
+  const b=e.target.closest('[data-d]');
+  if(b){const w=today(),k=key();
+    w[k]=Math.max(0,(w[k]||0)+parseInt(b.getAttribute('data-d'),10));
+    persist();render();return}
+
+  const tk=e.target.closest('[data-take]');
+  if(tk){const id=tk.getAttribute('data-take'),k=key(),t=taken(k),i=t.indexOf(id);
+    if(i>=0)t.splice(i,1);else t.push(id);
+    persist();render();return}
+
+  const rm=e.target.closest('[data-rmsup]');
+  if(rm){const id=rm.getAttribute('data-rmsup');
+    store.supps=supps().filter(x=>x.id!==id);
+    /* Aus der Historie NICHT loeschen: was du genommen hast, hast du genommen.
+       Der Plan aendert sich, die Vergangenheit nicht. */
+    persist();render();return}
+
+  if(e.target.closest('[data-addsup]')){adding=true;render();return}
+  if(e.target.closest('[data-addgo]')){addSupp();return}
 });
 if(!window.Vitality){window.Vitality={save:function(d){try{localStorage.setItem('v:prev:fuel',JSON.stringify(d));}catch(e){}return Promise.resolve(true);},load:function(){try{return Promise.resolve(JSON.parse(localStorage.getItem('v:prev:fuel')||'{}'));}catch(e){return Promise.resolve({});}}};}
 (async()=>{const d=await window.Vitality.load();store=(d&&typeof d==='object'&&!Array.isArray(d))?d:{};render();})();

@@ -123,10 +123,21 @@ function macroBlock(){
        aussieht, wird fuer kaputt gehalten — genau das ist hier schon passiert. */
     return '<div class="none">noch nichts von heute angekommen.<br>Kommt aus <b>Yazio → Apple Health → Kurzbefehl</b>, sobald der laeuft.</div>';
   }
-  const f=[['kcal',n.kcal,''],['protein',n.protein,'g'],['carbs',n.carbs,'g'],['fat',n.fat,'g']];
-  return '<div class="macros">'+f.map(function(x){
+  /* Zucker und Ballaststoffe stehen bewusst hinter den vier Hauptwerten und
+     erscheinen nur, wenn Yazio sie geliefert hat — sonst waeren es zwei
+     Gedankenstriche, die jeden Tag Platz wegnehmen ohne etwas zu sagen. */
+  const f=[['kcal',n.kcal,''],['protein',n.protein,'g'],['carbs',n.carbs,'g'],['fat',n.fat,'g'],
+           ['zucker',n.sugar,'g'],['ballast',n.fiber,'g']]
+    .filter(function(x,i){return i<4||typeof x[1]==='number'});
+  let h='<div class="macros">'+f.map(function(x){
     return '<div class="macro"><b>'+(typeof x[1]==='number'?Math.round(x[1])+x[2]:'—')+'</b><span>'+x[0]+'</span></div>';
   }).join('')+'</div>';
+  if(typeof n.waterLiters==='number'){
+    /* Liter aus Health, getrennt vom Glaeserzaehler oben — zwei Messungen
+       derselben Sache, die nicht vermischt werden duerfen. */
+    h+='<div class="none" style="padding-top:10px">'+n.waterLiters.toFixed(1)+' l laut Health</div>';
+  }
+  return h;
 }
 
 function suppBlock(){

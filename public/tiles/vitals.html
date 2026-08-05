@@ -78,6 +78,14 @@
   .saveBtn:disabled{opacity:.5;cursor:default;transform:none;box-shadow:none}
 
   /* 7-day trend */
+  /* Was das iPhone liefert — nur Anzeige, nichts zum Antippen. */
+  .msec{margin-top:26px}
+  .msecHd{font-family:var(--mono);font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
+  .mgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:8px}
+  .mcell{border:1px solid var(--border);border-radius:12px;padding:11px 8px;background:rgba(14,14,17,.5);text-align:center}
+  .mcell b{display:block;font-size:17px;font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
+  .mcell span{display:block;font-family:var(--mono);font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-top:4px}
+  .msrc{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--muted);text-align:center;margin-top:12px}
   .trend{margin-top:26px}
   .trendHd{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
   .tEmpty{padding:20px 0;text-align:center;color:var(--muted);font-size:12px}
@@ -130,6 +138,34 @@ function trend(){
     +'<path d="'+path+'" fill="none" stroke="#6EE7B7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 }
 
+/* Alles, was per /api/health vom iPhone kommt. Bewusst nur Anzeige: diese
+   Zahlen misst ein Gerät, sie werden hier nicht bearbeitet — sonst wüsste
+   niemand mehr, ob 93 kg gemessen oder getippt sind. */
+const MEASURED=[
+  ['steps','Schritte',v=>Math.round(v).toLocaleString('de-CH')],
+  ['restingHR','Ruhepuls',v=>Math.round(v)+' bpm'],
+  ['hrv','HRV',v=>Math.round(v)+' ms'],
+  ['avgHR','Ø Puls',v=>Math.round(v)+' bpm'],
+  ['activeEnergy','Aktiv',v=>Math.round(v)+' kcal'],
+  ['exerciseMinutes','Training',v=>Math.round(v)+' min'],
+  ['weightKg','Gewicht',v=>v.toFixed(1)+' kg'],
+  ['bodyFat','Körperfett',v=>(v<=1?v*100:v).toFixed(1)+' %'],
+  ['sleepDeep','Tiefschlaf',fmtSleep],
+  ['sleepRem','REM',fmtSleep],
+];
+function measuredBlock(){
+  const t=todays();
+  if(!t)return '';
+  const cells=MEASURED.filter(m=>typeof t[m[0]]==='number')
+    .map(m=>'<div class="mcell"><b>'+m[2](t[m[0]])+'</b><span>'+m[1]+'</span></div>').join('');
+  /* Kein Leerzustand mit erhobenem Zeigefinger: wenn heute noch nichts kam,
+     verschwindet der Abschnitt einfach. Ein "noch keine Daten" jeden Morgen
+     um 6 Uhr waere nur Rauschen. */
+  if(!cells)return '';
+  return '<div class="msec"><div class="msecHd">✦ gemessen</div><div class="mgrid">'+cells+'</div>'
+    +'<div class="msrc">von deinen Geräten über Apple Health</div></div>';
+}
+
 function render(){
   const t=todays(),rec=estRecovery(t),tn=tone(rec);
   const line=trend();
@@ -141,6 +177,7 @@ function render(){
       +'<div class="feelRow" style="margin-top:20px">'+FEEL.map((f)=>'<button class="feel'+(draft.feel===f[1]?' on':'')+'" data-feel="'+f[1]+'">'+f[0]+'</button>').join('')+'</div>'
       +'<button class="saveBtn" data-save '+(draft.feel==null?'disabled':'')+' aria-label="Save">✓</button>'
     +'</div>'
+    +measuredBlock()
     +(line?'<div class="trend">'+line+'</div>':'');
 }
 

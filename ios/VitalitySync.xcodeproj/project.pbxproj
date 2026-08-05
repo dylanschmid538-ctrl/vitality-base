@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXFileReference section */
+		A100000000000000000005 /* VitalitySync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VitalitySync.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A100000000000000000001 /* VitalitySync */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
@@ -118,16 +122,6 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
-/* Begin PBXFileReference section */
-		A100000000000000000005 /* VitalitySync.app */ = {
-			isa = PBXFileReference;
-			explicitFileType = wrapper.application;
-			includeInIndex = 0;
-			path = VitalitySync.app;
-			sourceTree = BUILT_PRODUCTS_DIR;
-		};
-/* End PBXFileReference section */
-
 /* Begin XCBuildConfiguration section */
 		A10000000000000000000C /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -170,6 +164,7 @@
 				CODE_SIGN_ENTITLEMENTS = VitalitySync.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2XDYTKQ4LS;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
@@ -196,6 +191,7 @@
 				CODE_SIGN_ENTITLEMENTS = VitalitySync.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2XDYTKQ4LS;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
@@ -218,20 +214,20 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A10000000000000000000B /* Build configuration list for PBXProject "VitalitySync" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A10000000000000000000C /* Debug */,
-				A10000000000000000000D /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		A100000000000000000007 /* Build configuration list for PBXNativeTarget "VitalitySync" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A10000000000000000000E /* Debug */,
 				A10000000000000000000F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000B /* Build configuration list for PBXProject "VitalitySync" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000C /* Debug */,
+				A10000000000000000000D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

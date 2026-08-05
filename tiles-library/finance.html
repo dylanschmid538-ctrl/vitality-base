@@ -266,6 +266,20 @@ function spendingView(){
       +'<span class="val">'+fmtCHF(row[k])+'<div class="hsub" style="text-align:right">'+pct.toFixed(0)+'%</div></span></div>';
   });
 
+  /* Einnahmen sind kein gemessener Wert, sondern eine feste Zusage ab einem
+     Datum. Deshalb nur eine Zahl mit Startdatum statt einer Zeitreihe — und
+     der Ueberschuss erscheint NUR fuer Monate, in denen das Gehalt auch
+     tatsaechlich schon lief. Fuer Februar 3'246 Franken Ueberschuss
+     auszuweisen, waere frei erfunden. */
+  const inc=(store.income&&typeof store.income==='object')?store.income:null;
+  let surplus='';
+  if(inc&&typeof inc.monthly==='number'&&(!inc.from||spendMonth>=String(inc.from).slice(0,7))){
+    const left=inc.monthly-total;
+    surplus='<div class="mnav" style="gap:10px;margin-top:14px"><span class="hsub">'
+      +fmtCHF(inc.monthly)+' ein · '+fmtCHF(total)+' aus · <b style="color:'
+      +(left>=0?'var(--brand)':'var(--neg)')+'">'+fmtCHF(left)+(left>=0?' übrig':' zu viel')+'</b></span></div>';
+  }
+
   return '<div class="kick">✦ Ausgaben</div>'
     +'<div class="worth">'+fmtCHF(total)+'</div>'
     +'<div class="delta">'+monthLabel(spendMonth)+' · <b class="'+(up?'down':'')+'">'
@@ -275,6 +289,7 @@ function spendingView(){
       +'<span class="mlab">'+monthLabel(spendMonth)+'</span>'
       +'<button class="mbtn" data-mo="1"'+(i>=ms.length-1?' disabled':'')+'>›</button>'
     +'</div>'
+    +surplus
     +'<div class="list" style="margin-top:18px">'+list+'</div>'
     +(store.spendingUpdated?'<div class="hsub" style="text-align:center;margin-top:16px">Stand '+esc(store.spendingUpdated)+'</div>':'');
 }
